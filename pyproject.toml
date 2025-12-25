@@ -4,4 +4,11 @@ version = "0.1.0"
 description = "A tool for OCR processing of books using AI."
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "openai>=1.60.1",
+    "pillow>=10.4.0",
+    "pydantic>=2.10.6",
+]
+
+[project.scripts]
+book-ai-ocr-tool = "book_ai_ocr_tool.book_ai_ocr_tool:main"
