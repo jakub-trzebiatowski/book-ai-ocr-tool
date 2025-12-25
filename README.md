@@ -13,7 +13,7 @@ Ensure your API key is available in `OPENAI_API_KEY` (or set `--api-key-env`).
 ## Usage
 
 ```bash
-python book_ai_ocr_tool.py --input-dir path/to/images --output-dir path/to/output
+python book_ocr.py --input-dir path/to/images --output-dir path/to/output
 ```
 
 Options:

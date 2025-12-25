@@ -11,42 +11,23 @@ from typing import Iterable, List, Sequence
 from openai import OpenAI
 from openai.types.chat import ChatCompletionUserMessageParam, \
     ChatCompletionContentPartTextParam, ChatCompletionContentPartImageParam, ChatCompletionSystemMessageParam
-from pydantic import BaseModel, Field
 from PIL import Image
+
+from book_ai_ocr_tool.models import ImageOCRResult
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
 DEFAULT_MODEL = "gpt-5-mini"
 DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
 
 
-class ImageOCRParagraph(BaseModel):
-    text: str = Field(..., title="Paragraph Text",
-                      description="The text content of the paragraph. Should not include hyphens indicating word breaks at line/page endings. Broken words within paragraphs should be merged.")
-    tag: str | None = Field(..., title="Paragraph Tag",
-                            description="An optional tag indicating the type of paragraph per custom user-provided instructions")
-
-
-class ImageOCRPage(BaseModel):
-    page_number: int | None = Field(..., title="Page Number",
-                                    description="The page number of the image, if visible or can be deduced")
-    chapter_title: str | None = Field(..., title="Chapter Title",
-                                      description="The chapter title, if visible")
-    paragraphs: List[ImageOCRParagraph] = Field(..., title="Paragraphs",
-                                                description="List of paragraphs extracted from the page")
-
-
-class ImageOCRResult(BaseModel):
-    pages: List[ImageOCRPage] = Field(..., title="Pages",
-                                      description="List of pages processed (usually one or two per image)")
-
 
 @dataclass
 class OCRConfig:
     input_dir: Path
     output_dir: Path
+    prompt_file: Path
     model: str = DEFAULT_MODEL
     api_key_env: str = DEFAULT_API_KEY_ENV
-    prompt_file: Path | None = None
     limit: int | None = None
 
 
@@ -89,8 +70,8 @@ def parse_args(argv: Sequence[str]) -> OCRConfig:
     )
     parser.add_argument(
         "--prompt-file",
+        required=True,
         type=Path,
-        default=None,
         help="Path to a text file containing the user prompt for the OCR task",
     )
     parser.add_argument(
@@ -125,15 +106,7 @@ def ensure_output_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-prompt = (
-    "You are an OCR assistant. Process the image of a book page/pages. If a page text ends with a hyphen, do not"
-    "include the hyphen in the output text. The book title is ''"
-)
-
-
-def load_prompt(prompt_file: Path | None) -> str:
-    if prompt_file is None:
-        return prompt
+def load_prompt(prompt_file: Path) -> str:
     if not prompt_file.exists():
         raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
     with prompt_file.open("r", encoding="utf-8") as f:
@@ -144,7 +117,7 @@ def call_gpt(
         client: OpenAI, model: str, image_data_url: str, user_prompt_text: str) -> ImageOCRResult:
     system_message: ChatCompletionSystemMessageParam = {
         "role": "system",
-        "content": "You are an OCR assistant. Process the image of a book page/pages. Follow specific user-instructions.",
+        "content": "You are an OCR assistant. Process the image of a book page/pages. Use proper Unicode typographic characters. Never consider page numbers paragraphs. Ignore footnotes. Follow specific user-instructions.",
     }
 
     prompt_text_part: ChatCompletionContentPartTextParam = {
