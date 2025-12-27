@@ -6,14 +6,13 @@ import argparse
 import json
 import os
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
 from google.genai import Client
 from google.genai.types import Part, Content, SpeechConfig, VoiceConfig, PrebuiltVoiceConfig, \
-    CreateBatchJobConfig, InlinedRequest, GenerateContentConfig, GenerateContentResponse, JobState
+    GenerateContentConfig, GenerateContentResponse, JobState
 
 from book_ai_ocr_tool.models import ChapterContent
 
@@ -99,14 +98,16 @@ def slugify_tag(tag: str | None) -> str:
     return slug or "tagged"
 
 
-def build_synthesize_paragraph_request(
+def synthesize_paragraph(
+        client: Client,
         text: str,
         voice: str,
-) -> InlinedRequest:
+) -> bytes:
     if not text.strip():
         raise ValueError("Cannot synthesize empty paragraph")
 
-    return InlinedRequest(
+    response = client.models.generate_content(
+        model=DEFAULT_TTS_MODEL,
         contents=Content(
             role="user",
             parts=[
@@ -123,17 +124,20 @@ def build_synthesize_paragraph_request(
                 ),
             ),
         ),
-        metadata={
-            "key": "",
-        },
     )
+
+    audio_data = _extract_inline_data_bytes(
+        response=response,
+        expected_mime_type=AUDIO_MIME,
+    )
+
+    return audio_data
 
 
 def write_audio_file(path: Path, audio_bytes: bytes) -> None:
     ensure_dir(path.parent)
     with path.open("wb") as f:
         f.write(audio_bytes)
-
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -168,7 +172,10 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     print(f"Synthesizing chapter '{config.chapter_id}': {chapter.title}")
 
-    inline_requests: list[InlinedRequest] = []
+    client = Client(
+        project=PROJECT_ID,
+        location=LOCATION_ID,
+    )
 
     for paragraph_idx, paragraph in enumerate(chapter.paragraphs, start=1):
         output_path = build_paragraph_audio_file_path(
@@ -184,61 +191,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         if voice is None:
             raise RuntimeError(f"No voice mapping found for tag '{paragraph.tag}'")
 
-        inline_requests.append(
-            build_synthesize_paragraph_request(
-                text=paragraph.text,
-                voice=voice,
-            ),
-        )
-
-    client = Client(
-        project=PROJECT_ID,
-        location=LOCATION_ID,
-    )
-
-    models = client.models.list()
-
-    for model in models:
-        print(f"Available model '{model.name}'")
-
-    batch_job = client.batches.create(
-        model=config.model,
-        src=inline_requests,
-        config=CreateBatchJobConfig(
-            display_name=f"Batch job for chapter {config.chapter_id}",
-        ),
-    )
-
-    batch_job_name = batch_job.name
-
-    print(f"Batch job name: {batch_job_name}")
-
-    while True:
-        fresh_batch_job = client.batches.get(name=batch_job_name)
-        job_state = fresh_batch_job.state
-
-        print(f"Current job state: {job_state.name}")
-
-        if job_state in FINAL_JOB_STATES:
-            break
-
-        print(f"Job not finished. Waiting...")
-
-        time.sleep(30)
-
-    for paragraph_idx, inline_response in enumerate(batch_job.dest.inlined_responses, start=1):
-        response = inline_response.response
-
-        if response is None:
-            raise RuntimeError(f"No response received for inline request. Error: {inline_response.error}")
-
-        output_path = build_paragraph_audio_file_path(
-            index=paragraph_idx,
-        )
-
-        audio_bytes = _extract_inline_data_bytes(
-            response=response,
-            expected_mime_type=AUDIO_MIME,
+        audio_bytes = synthesize_paragraph(
+            client=client,
+            text=paragraph.text,
+            voice=voice,
         )
 
         write_audio_file(
