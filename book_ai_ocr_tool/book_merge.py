@@ -42,6 +42,18 @@ def load_ocr_result(json_path: Path) -> ImageOCRResult:
     return ImageOCRResult(**data)
 
 
+def append_paragraphs_with_tag_merge(
+    existing: List[ImageOCRParagraph],
+    new_paragraphs: List[ImageOCRParagraph],
+) -> None:
+    for paragraph in new_paragraphs:
+        paragraph_copy = ImageOCRParagraph(**paragraph.model_dump())
+        if existing and existing[-1].tag == paragraph_copy.tag:
+            existing[-1].text = f"{existing[-1].text.rstrip()}\n\n{paragraph_copy.text.lstrip()}"
+        else:
+            existing.append(paragraph_copy)
+
+
 def merge_chapters(ocr_results: List[ImageOCRResult]) -> List[ChapterContent]:
     """Merge OCR results by chapter title, tracking current chapter and handling missing titles."""
     chapters: List[ChapterContent] = []
@@ -74,7 +86,7 @@ def merge_chapters(ocr_results: List[ImageOCRResult]) -> List[ChapterContent]:
                 current_chapter_title = title_to_use
                 current_chapter_paragraphs = []
 
-            current_chapter_paragraphs.extend(page.paragraphs)
+            append_paragraphs_with_tag_merge(current_chapter_paragraphs, page.paragraphs)
 
     # Fail if we ended with an unknown chapter
     if current_chapter_title is None:
@@ -114,6 +126,16 @@ def merge_directory(config: MergeConfig) -> int:
     except Exception as exc:  # pragma: no cover - logic error
         print(f"Failed to merge chapters: {exc}", file=sys.stderr)
         return 5
+
+    # Clean the output directory
+
+    for existing_file in config.output_dir.iterdir():
+        if existing_file.is_file():
+            try:
+                existing_file.unlink()
+                print(f"Removed existing file: {existing_file.name}")
+            except Exception as exc:  # pragma: no cover - file dependent
+                print(f"Failed to remove existing file {existing_file.name}: {exc}", file=sys.stderr)
 
     # Write output files
     failures = 0

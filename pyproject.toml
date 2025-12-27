@@ -8,8 +8,10 @@ dependencies = [
     "openai>=1.60.1",
     "pillow>=10.4.0",
     "pydantic>=2.10.6",
+    "google-genai>=1.56.0",
 ]
 
 [project.scripts]
 book-ai-ocr-tool = "book_ai_ocr_tool.book_ocr:main"
 book-merge = "book_ai_ocr_tool.book_merge:main"
+book-tts = "book_ai_ocr_tool.book_tts:main"

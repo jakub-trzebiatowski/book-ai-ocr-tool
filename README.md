@@ -21,3 +21,12 @@ Options:
 - `--api-key-env` (default `OPENAI_API_KEY`)
 
 Outputs one JSON per input image containing page number, text, optional confidence and warnings.
+
+## Gemini hello example
+
+1. Export your key: `export GOOGLE_API_KEY="..."`
+2. Run the demo:
+
+```bash
+python -m book_ai_ocr_tool.gemini_hello
+```

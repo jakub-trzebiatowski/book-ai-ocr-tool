@@ -1,5 +1,4 @@
 import argparse
-import base64
 import json
 import os
 import sys
@@ -8,17 +7,20 @@ from io import BytesIO
 from pathlib import Path
 from typing import Iterable, List, Sequence
 
-from openai import OpenAI
-from openai.types.chat import ChatCompletionUserMessageParam, \
-    ChatCompletionContentPartTextParam, ChatCompletionContentPartImageParam, ChatCompletionSystemMessageParam
+from google import genai
+from google.genai import types
 from PIL import Image
 
 from book_ai_ocr_tool.models import ImageOCRResult
 
+PROJECT_ID = "book-digitizer-482317"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
-DEFAULT_MODEL = "gpt-5-mini"
-DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
-
+DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_API_KEY_ENV = "GOOGLE_API_KEY"
+SYSTEM_INSTRUCTIONS = (
+    "You are an OCR assistant. Process book page images, return structured JSON matching the ImageOCRResult schema. "
+    "Use proper Unicode typography, never treat page numbers as body paragraphs, ignore footnotes unless explicitly requested."
+)
 
 
 @dataclass
@@ -45,9 +47,9 @@ class ImageHandle:
         """Check if the output JSON file already exists."""
         return self.output_json_path.exists()
 
-    def to_data_url(self) -> str:
-        """Convert the input image to a base64 data URL."""
-        return image_to_data_url(self.input_image_path)
+    def to_png_bytes(self) -> bytes:
+        """Convert the input image to PNG bytes."""
+        return image_to_png_bytes(self.input_image_path)
 
     def write_result(self, result: ImageOCRResult):
         """Write OCR result to output JSON file."""
@@ -59,14 +61,14 @@ class ImageHandle:
 
 
 def parse_args(argv: Sequence[str]) -> OCRConfig:
-    parser = argparse.ArgumentParser(description="OCR book pages using OpenAI GPT with structured output")
+    parser = argparse.ArgumentParser(description="OCR book pages using Gemini with structured output")
     parser.add_argument("--input-dir", required=True, type=Path, help="Directory containing page images")
     parser.add_argument("--output-dir", required=True, type=Path, help="Directory to write OCR results")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="OpenAI model to use (default: gpt-5-mini)")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="Gemini model to use (default: gemini-2.0-flash)")
     parser.add_argument(
         "--api-key-env",
         default=DEFAULT_API_KEY_ENV,
-        help="Environment variable containing the OpenAI API key (default: OPENAI_API_KEY)",
+        help="Environment variable containing the Gemini API key (default: GOOGLE_API_KEY)",
     )
     parser.add_argument(
         "--prompt-file",
@@ -93,13 +95,12 @@ def find_images(directory: Path) -> List[Path]:
     return sorted(files)
 
 
-def image_to_data_url(path: Path) -> str:
+def image_to_png_bytes(path: Path) -> bytes:
     with Image.open(path) as img:
         img = img.convert("RGB")
         buf = BytesIO()
         img.save(buf, format="PNG")
-    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
-    return f"data:image/png;base64,{encoded}"
+        return buf.getvalue()
 
 
 def ensure_output_dir(path: Path) -> None:
@@ -113,47 +114,39 @@ def load_prompt(prompt_file: Path) -> str:
         return f.read().strip()
 
 
-def call_gpt(
-        client: OpenAI, model: str, image_data_url: str, user_prompt_text: str) -> ImageOCRResult:
-    system_message: ChatCompletionSystemMessageParam = {
-        "role": "system",
-        "content": "You are an OCR assistant. Process the image of a book page/pages. Use proper Unicode typographic characters. Never consider page numbers paragraphs. Ignore footnotes. Follow specific user-instructions.",
-    }
-
-    prompt_text_part: ChatCompletionContentPartTextParam = {
-        "type": "text",
-        "text": user_prompt_text,
-    }
-
-    image_part: ChatCompletionContentPartImageParam = {"type": "image_url",
-                                                       "image_url": {"url": image_data_url, "detail": "high"}}
-
-    user_message: ChatCompletionUserMessageParam = {
-        "role": "user",
-        "content": [
-            prompt_text_part,
-            image_part,
-        ],
-    }
-
-    completion = client.chat.completions.parse(
+def call_gemini(
+        client: genai.Client,
+        model: str,
+        image_png: bytes,
+        user_prompt_text: str,
+) -> ImageOCRResult:
+    response = client.models.generate_content(
         model=model,
-        messages=[
-            system_message,
-            user_message
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_json_schema=ImageOCRResult.model_json_schema(),
+        ),
+        contents=[
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(text=SYSTEM_INSTRUCTIONS),
+                ],
+            ),
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(text=user_prompt_text),
+                    types.Part.from_bytes(data=image_png, mime_type="image/png"),
+                ],
+            ),
         ],
-        response_format=ImageOCRResult,
     )
 
-    completion_message = completion.choices[0].message
+    if not response.text:
+        raise RuntimeError("Gemini response payload was empty")
 
-    if completion_message.refusal:
-        print(f"Error: {completion.refusal}", file=sys.stderr)
-        sys.exit(1)
-    else:
-        image_ocr_result = completion_message.parsed
-
-    return image_ocr_result
+    return ImageOCRResult.model_validate_json(response.text)
 
 
 def load_api_key(env_var: str) -> str:
@@ -175,9 +168,13 @@ def ocr_directory(config: OCRConfig) -> int:
         return 3
 
     try:
-        client = OpenAI(api_key=load_api_key(config.api_key_env))
+        client = genai.Client(
+            vertexai=True,
+            project=PROJECT_ID,
+            location="us-central1"
+        )
     except Exception as exc:  # pragma: no cover - environment dependent
-        print(f"Failed to initialize OpenAI client: {exc}", file=sys.stderr)
+        print(f"Failed to initialize Gemini client: {exc}", file=sys.stderr)
         return 4
 
     try:
@@ -202,8 +199,8 @@ def ocr_directory(config: OCRConfig) -> int:
             continue
 
         try:
-            data_url = handle.to_data_url()
-            result = call_gpt(client, config.model, data_url, user_prompt_text)
+            image_png = handle.to_png_bytes()
+            result = call_gemini(client, config.model, image_png, user_prompt_text)
 
             handle.write_result(result)
 
