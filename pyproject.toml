@@ -15,3 +15,4 @@ dependencies = [
 book-ai-ocr-tool = "book_ai_ocr_tool.book_ocr:main"
 book-merge = "book_ai_ocr_tool.book_merge:main"
 book-tts = "book_ai_ocr_tool.book_tts:main"
+book-concat = "book_ai_ocr_tool.book_concat:main"

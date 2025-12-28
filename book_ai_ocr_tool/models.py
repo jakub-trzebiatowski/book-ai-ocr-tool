@@ -26,15 +26,3 @@ class ImageOCRPage(BaseModel):
 class ImageOCRResult(BaseModel):
     pages: List[ImageOCRPage] = Field(..., title="Pages",
                                       description="List of pages on the image (usually one or two)")
-
-
-class ChapterContent(BaseModel):
-    title: str = Field(..., title="Chapter Title", description="The chapter title")
-    paragraphs: List[ImageOCRParagraph] = Field(..., title="Paragraphs",
-                                                description="All paragraphs in the chapter")
-
-
-class BookMergeResult(BaseModel):
-    chapters: List[ChapterContent] = Field(..., title="Chapters",
-                                           description="List of chapters with merged content")
-

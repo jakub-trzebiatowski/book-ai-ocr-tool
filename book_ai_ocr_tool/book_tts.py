@@ -32,6 +32,7 @@ FINAL_JOB_STATES = (
 # Defaults tuned for quick previews; allow overrides via CLI.
 DEFAULT_TTS_MODEL = "gemini-2.5-flash-preview-tts"
 
+NARRATOR_TAG = "narrator"
 
 @dataclass
 class TTSConfig:
@@ -99,13 +100,13 @@ def slugify_tag(tag: str | None) -> str:
     return slug or "tagged"
 
 
-def synthesize_paragraph(
+def generate_content_tts(
         client: Client,
         text: str,
         voice: str,
 ) -> bytes:
     if not text.strip():
-        raise ValueError("Cannot synthesize empty paragraph")
+        raise ValueError("Cannot synthesize empty text")
 
     response = client.models.generate_content(
         model=DEFAULT_TTS_MODEL,
@@ -135,7 +136,7 @@ def synthesize_paragraph(
     return audio_data
 
 
-def write_audio_file(path: Path, audio_bytes: bytes) -> None:
+def write_wav_file(path: Path, audio_bytes: bytes) -> None:
     ensure_dir(path.parent)
 
     with wave.open(str(path), "wb") as wf:
@@ -162,6 +163,11 @@ def main(argv: Iterable[str] | None = None) -> int:
         print(f"Failed to parse voice map JSON: {config.voice_map_path}", file=sys.stderr)
         return 3
 
+    narrator_voice_name = voice_map.get(NARRATOR_TAG)
+
+    if narrator_voice_name is None:
+        raise RuntimeError(f"No voice mapping found for narrator tag '{NARRATOR_TAG}'")
+
     try:
         chapter = load_chapter(chapter_json_path)
     except Exception as exc:  # pragma: no cover - file dependent
@@ -183,13 +189,26 @@ def main(argv: Iterable[str] | None = None) -> int:
         location=LOCATION_ID,
     )
 
+    title_audio_bytes = generate_content_tts(
+        client=client,
+        text=chapter.title,
+        voice=narrator_voice_name,
+    )
+
+    title_wav_path = chapter_output_dir / "000_title.wav"
+
+    write_wav_file(
+        path=title_wav_path,
+        audio_bytes=title_audio_bytes,
+    )
+
     for paragraph_idx, paragraph in enumerate(chapter.paragraphs, start=1):
-        output_path = build_paragraph_audio_file_path(
+        paragraph_wav_path = build_paragraph_audio_file_path(
             index=paragraph_idx,
         )
 
-        if output_path.exists():
-            print(f"  skipping existing file: {output_path.relative_to(config.output_dir)}")
+        if paragraph_wav_path.exists():
+            print(f"  skipping existing file: {paragraph_wav_path.relative_to(config.output_dir)}")
             continue
 
         voice = voice_map.get(paragraph.tag)
@@ -197,15 +216,15 @@ def main(argv: Iterable[str] | None = None) -> int:
         if voice is None:
             raise RuntimeError(f"No voice mapping found for tag '{paragraph.tag}'")
 
-        audio_bytes = synthesize_paragraph(
+        paragraph_audio_bytes = generate_content_tts(
             client=client,
             text=paragraph.text,
             voice=voice,
         )
 
-        write_audio_file(
-            path=output_path,
-            audio_bytes=audio_bytes,
+        write_wav_file(
+            path=paragraph_wav_path,
+            audio_bytes=paragraph_audio_bytes,
         )
 
     return 0
