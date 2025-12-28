@@ -3,6 +3,7 @@ import sys
 import wave
 from pathlib import Path
 from typing import Iterable, Tuple
+from pydub import AudioSegment
 
 
 AudioParams = Tuple[int, int, int, int, str, str]
@@ -55,11 +56,18 @@ def concatenate_parts(wav_paths: Iterable[Path], output_path: Path) -> Path:
         combined.extend(frames)
 
     assert first_params is not None  # for type checkers
+    combined.extend(_silence(1.0, first_params))
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(output_path), "wb") as out_wav:
-        nchannels, sampwidth, framerate, _, comptype, compname = first_params
-        out_wav.setparams((nchannels, sampwidth, framerate, 0, comptype, compname))
-        out_wav.writeframes(combined)
+    nchannels, sampwidth, framerate, _, comptype, _ = first_params
+    if comptype != "NONE":
+        raise ValueError("Only uncompressed PCM WAV files are supported")
+    segment = AudioSegment(
+        data=bytes(combined),
+        sample_width=sampwidth,
+        frame_rate=framerate,
+        channels=nchannels,
+    )
+    segment.export(output_path, format="mp3")
 
     return output_path
 
@@ -89,7 +97,7 @@ def main() -> None:
             print(f"Warning: no .wav files found in {chapter_dir}, skipping", file=sys.stderr)
             continue
 
-        output_path = output_dir / f"{chapter_dir.name}.wav"
+        output_path = output_dir / f"{chapter_dir.name}.mp3"
         try:
             concatenate_parts(wav_parts, output_path)
         except Exception as exc:  # keep CLI concise per chapter
