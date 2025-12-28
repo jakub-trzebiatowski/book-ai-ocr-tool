@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -19,7 +20,7 @@ from book_ai_ocr_tool.models import ChapterContent
 PROJECT_ID = "book-digitizer-482317"
 LOCATION_ID = "us-central1"
 
-AUDIO_MIME = "audio/mp3"
+AUDIO_MIME = "audio/L16;codec=pcm;rate=24000"
 
 FINAL_JOB_STATES = (
     JobState.JOB_STATE_SUCCEEDED,
@@ -46,7 +47,7 @@ def parse_args(argv: Sequence[str]) -> TTSConfig:
     parser.add_argument("--chapters-dir", required=True, type=Path, help="Directory containing chapter_XXX.json files")
     parser.add_argument("--chapter-id", required=True, type=str,
                         help="ID of the chapter to process (e.g., 'chapter_001')")
-    parser.add_argument("--output-dir", required=True, type=Path, help="Directory where MP3 files will be written")
+    parser.add_argument("--output-dir", required=True, type=Path, help="Directory where wave files will be written")
     parser.add_argument("--voice-map", required=True, dest="voice_map_path", type=Path,
                         help="Path to JSON file mapping tags to voices")
     parser.add_argument("--model", default=DEFAULT_TTS_MODEL,
@@ -115,7 +116,7 @@ def synthesize_paragraph(
             ],
         ),
         config=GenerateContentConfig(
-            response_mime_type=AUDIO_MIME,
+            response_modalities=["AUDIO"],
             speech_config=SpeechConfig(
                 voice_config=VoiceConfig(
                     prebuilt_voice_config=PrebuiltVoiceConfig(
@@ -136,8 +137,12 @@ def synthesize_paragraph(
 
 def write_audio_file(path: Path, audio_bytes: bytes) -> None:
     ensure_dir(path.parent)
-    with path.open("wb") as f:
-        f.write(audio_bytes)
+
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)  # Mono
+        wf.setsampwidth(2)  # 16-bit
+        wf.setframerate(24000)  # 24kHz sample rate
+        wf.writeframes(audio_bytes)
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -167,12 +172,13 @@ def main(argv: Iterable[str] | None = None) -> int:
     ensure_dir(chapter_output_dir)
 
     def build_paragraph_audio_file_path(index: int) -> Path:
-        filename = f"{index:03d}.mp3"
+        filename = f"{index:03d}.wav"
         return chapter_output_dir / filename
 
     print(f"Synthesizing chapter '{config.chapter_id}': {chapter.title}")
 
     client = Client(
+        vertexai=True,
         project=PROJECT_ID,
         location=LOCATION_ID,
     )
